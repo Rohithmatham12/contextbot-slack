@@ -1,0 +1,53 @@
+{
+  "display_information": {
+    "name": "ContextBot",
+    "description": "Ask anything about your codebase. Powered by ContextOS MCP — secrets auto-redacted.",
+    "background_color": "#1a1a2e",
+    "long_description": "ContextBot connects ContextOS MCP to Slack. Ask a question, get an AI answer backed by real code context — not hallucinations. Files are ranked by import centrality and keyword relevance. Secrets are automatically redacted before any code appears in Slack."
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "ContextBot",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/ctx",
+        "description": "Query your codebase with ContextOS",
+        "usage_hint": "ask <question> | files <task> | scan | churn",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "commands",
+        "im:history",
+        "im:read",
+        "im:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

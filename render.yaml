@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: contextbot-slack
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt &&
+      pip install rm-contextos &&
+      git clone https://github.com/Rohithmatam12/ContextOS /opt/demo-repo --depth=1 &&
+      contextos init --repo /opt/demo-repo &&
+      contextos scan /opt/demo-repo
+    startCommand: python bot.py
+    envVars:
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_APP_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: REPO_PATH
+        value: /opt/demo-repo
+      - key: CONTEXTOS_BIN
+        value: contextos

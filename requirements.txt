@@ -1,0 +1,6 @@
+slack-bolt>=1.21.0
+slack-sdk>=3.33.0
+mcp>=1.0.0
+groq>=0.11.0
+python-dotenv>=1.0.0
+rm-contextos>=0.1.0
