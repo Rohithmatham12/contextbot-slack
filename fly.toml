@@ -1,0 +1,9 @@
+app = 'contextbot-slack'
+primary_region = 'ord'
+
+[build]
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
