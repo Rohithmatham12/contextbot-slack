@@ -1,4 +1,0 @@
-INFO:contextbot:ContextBot starting | repo=/Users/rohithmatam/ContextOS
-INFO:slack_bolt.App:A new session has been established (session id: 33a81fe1-38ca-451e-8081-c5528faa8c48)
-INFO:slack_bolt.App:⚡️ Bolt app is running!
-INFO:slack_bolt.App:Starting to receive messages from a new connection (session id: 33a81fe1-38ca-451e-8081-c5528faa8c48)
