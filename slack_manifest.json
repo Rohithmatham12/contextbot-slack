@@ -1,9 +1,9 @@
 {
   "display_information": {
     "name": "ContextBot",
-    "description": "Ask anything about any GitHub repo. Code context (MCP) + Slack history (RTS) + thread summarization (Slack AI) — secrets stripped at ingestion.",
+    "description": "Ask anything about any GitHub repo. Secrets stripped at ingestion.",
     "background_color": "#1a1a2e",
-    "long_description": "ContextBot connects ContextOS MCP to Slack. Connect any GitHub repo with /ctx connect, then ask questions and get AI answers backed by real code context — not hallucinations. Secrets are automatically detected and redacted before anything is stored or sent to an LLM. Real-Time Search pulls relevant Slack discussions into the answer. Thread summarization (Slack AI capability) gives the agent full conversation context before reasoning."
+    "long_description": "ContextBot connects ContextOS MCP to Slack. Connect any GitHub repo with /ctx connect, then ask questions and get AI answers backed by real code context, not hallucinations. Secrets are automatically detected and redacted before anything is stored or sent to an LLM. Real-Time Search pulls relevant Slack discussions into the answer. Thread summarization gives the agent full conversation context before reasoning."
   },
   "features": {
     "app_home": {
@@ -29,14 +29,12 @@
       "bot": [
         "app_mentions:read",
         "chat:write",
-        "chat:write.public",
         "commands",
         "im:history",
         "im:read",
         "im:write",
         "channels:history",
-        "groups:history",
-        "search:read"
+        "groups:history"
       ]
     }
   },

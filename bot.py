@@ -10,10 +10,12 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 
 from dotenv import load_dotenv
 
-load_dotenv()  # must run before project imports (they read env at import time)
+load_dotenv()
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -31,32 +33,59 @@ log = logging.getLogger("contextbot")
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 storage.init()
 
+# Track in-progress indexing jobs to prevent duplicate connects
+_indexing_lock: dict[str, bool] = {}
+_indexing_lock_mutex = threading.Lock()
+
+PRESEED_REPO = os.getenv("PRESEED_REPO", "https://github.com/Rohithmatham12/ContextOS")
+SUGGESTED_QUESTION = "What does the secret redaction pipeline do and why does it matter?"
+
+# ── URL validation ─────────────────────────────────────────────────────────────
+
+_GITHUB_PATTERN = re.compile(
+    r"^https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\.git)?/?$"
+)
+
+
+def _validate_github_url(url: str) -> str | None:
+    """Return an error string if invalid, None if ok."""
+    if not url.startswith(("http://", "https://")):
+        return "Not a valid URL. Try: `https://github.com/owner/repo`"
+    if "github.com" not in url:
+        return "Only GitHub repos are supported. URL must contain `github.com`"
+    if not _GITHUB_PATTERN.match(url):
+        return "Invalid GitHub URL format. Try: `https://github.com/owner/repo`"
+    return None
+
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-
-def _active_repo_path(workspace_id: str) -> str | None:
-    repo = storage.get_active_repo(workspace_id)
-    return repo["local_path"] if repo else None
-
 
 def _active_repo(workspace_id: str) -> dict | None:
     return storage.get_active_repo(workspace_id)
 
 
+def _active_repo_path(workspace_id: str) -> str | None:
+    repo = _active_repo(workspace_id)
+    if not repo:
+        return None
+    path = repo["local_path"]
+    return path if os.path.isdir(path) else None
+
+
 def _require_repo(workspace_id: str, respond) -> str | None:
-    """Return local_path or send error and return None."""
     path = _active_repo_path(workspace_id)
-    if not path or not os.path.isdir(path):
+    if not path:
         respond({
             "response_type": "ephemeral",
-            "text": "No repo connected. Use `/ctx connect <github-url>` first.",
+            "text": "No repo connected. Use `/ctx connect <github-url>` first.\n"
+                    f"Try: `/ctx connect {PRESEED_REPO}`",
         })
         return None
     return path
 
 
 def _clone_and_index(github_url: str, workspace_id: str) -> dict:
-    """Clone repo, scan with ContextOS MCP, return stats dict."""
+    """Clone repo, run ContextOS MCP scan, return stats. Raises on failure."""
     name = github_url.rstrip("/").split("/")[-1].replace(".git", "")
     local_path = f"/tmp/repos/{workspace_id}/{name}"
 
@@ -64,43 +93,69 @@ def _clone_and_index(github_url: str, workspace_id: str) -> dict:
     if os.path.exists(local_path):
         shutil.rmtree(local_path)
 
-    subprocess.run(
+    result = subprocess.run(
         ["git", "clone", github_url, local_path, "--depth=1"],
-        check=True, capture_output=True, timeout=120,
+        capture_output=True, timeout=120,
     )
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace").lower()
+        if "not found" in stderr or "repository" in stderr or "authentication" in stderr:
+            raise PermissionError(
+                f"Repo not found or private. Make sure `{github_url}` is public."
+            )
+        raise RuntimeError(
+            f"git clone failed: {result.stderr.decode(errors='replace')[:200]}"
+        )
 
     scan_result = mcp_client.scan_repo(repo_path=local_path)
 
-    # Parse file count from scan output
     file_count = 0
     for line in scan_result.splitlines():
         if "Scanned" in line and "files" in line:
-            parts = line.split()
-            for i, p in enumerate(parts):
+            for i, p in enumerate(line.split()):
                 if p == "files" and i > 0:
                     try:
-                        file_count = int(parts[i - 1])
+                        file_count = int(line.split()[i - 1])
                     except ValueError:
                         pass
 
-    # Count secrets redacted — ContextOS logs [REDACTED_*] tokens
-    # Run a quick pack to surface redaction count
+    # Count secrets redacted by sampling pack output
     redaction_count = 0
     try:
-        sample = mcp_client.pack_context("security secrets api keys", budget=16000,
-                                         repo_path=local_path)
+        sample = mcp_client.pack_context(
+            "security secrets api keys passwords tokens", budget=16000, repo_path=local_path
+        )
         redaction_count = sample.count("[REDACTED_")
     except Exception:
         pass
 
-    storage.upsert_repo(workspace_id, github_url, local_path, name,
-                        file_count=file_count, redaction_count=redaction_count)
-
+    storage.upsert_repo(
+        workspace_id, github_url, local_path, name,
+        file_count=file_count, redaction_count=redaction_count,
+    )
     return {
         "name": name, "local_path": local_path,
         "file_count": file_count, "redaction_count": redaction_count,
         "scan_result": scan_result,
     }
+
+
+def _preseed_if_empty(workspace_id: str):
+    """Auto-index the preseed repo if workspace has no repos (background)."""
+    if storage.get_repos(workspace_id):
+        return
+    with _indexing_lock_mutex:
+        if _indexing_lock.get(workspace_id):
+            return
+        _indexing_lock[workspace_id] = True
+    try:
+        _clone_and_index(PRESEED_REPO, workspace_id)
+        log.info("Preseeded %s for workspace %s", PRESEED_REPO, workspace_id)
+    except Exception as exc:
+        log.warning("Preseed failed: %s", exc)
+    finally:
+        with _indexing_lock_mutex:
+            _indexing_lock[workspace_id] = False
 
 
 # ── /ctx command ───────────────────────────────────────────────────────────────
@@ -109,7 +164,6 @@ def _clone_and_index(github_url: str, workspace_id: str) -> dict:
 def handle_ctx(ack, command, respond, client):
     ack()
     workspace_id = command["team_id"]
-    channel_id = command.get("channel_id", "")
     raw = (command.get("text") or "").strip()
     parts = raw.split(None, 1)
     sub = parts[0].lower() if parts else "help"
@@ -119,10 +173,24 @@ def handle_ctx(ack, command, respond, client):
     if sub == "connect":
         if not arg:
             respond({"response_type": "ephemeral",
-                     "text": "Usage: `/ctx connect <github-url>`"})
+                     "text": f"Usage: `/ctx connect <github-url>`\n"
+                             f"Example: `/ctx connect {PRESEED_REPO}`"})
             return
+
+        err = _validate_github_url(arg)
+        if err:
+            respond({"response_type": "ephemeral", "text": f"❌ {err}"})
+            return
+
+        with _indexing_lock_mutex:
+            if _indexing_lock.get(workspace_id):
+                respond({"response_type": "ephemeral",
+                         "text": "⏳ Already indexing a repo. Wait for it to finish."})
+                return
+            _indexing_lock[workspace_id] = True
+
         respond({"response_type": "in_channel",
-                 "text": f"⏳ Cloning and indexing `{arg}`... (may take ~30s)"})
+                 "text": f"⏳ Cloning and indexing `{arg}`... (~30s)"})
         try:
             stats = _clone_and_index(arg, workspace_id)
             respond({
@@ -132,13 +200,18 @@ def handle_ctx(ack, command, respond, client):
                     stats["redaction_count"]
                 ),
             })
-        except subprocess.CalledProcessError:
+        except PermissionError as exc:
+            respond({"response_type": "ephemeral", "text": f"❌ {exc}"})
+        except subprocess.TimeoutExpired:
             respond({"response_type": "ephemeral",
-                     "text": f"❌ Could not clone `{arg}`. Check the URL and try again."})
+                     "text": "❌ Clone timed out (>120s). Repo may be too large. Try a smaller one."})
         except Exception as exc:
             log.exception("connect failed")
             respond({"response_type": "ephemeral",
-                     "blocks": formatters.error_block(str(exc))})
+                     "text": f"❌ Failed to connect repo: {str(exc)[:200]}"})
+        finally:
+            with _indexing_lock_mutex:
+                _indexing_lock[workspace_id] = False
 
     # ── use ────────────────────────────────────────────────────────────────────
     elif sub == "use":
@@ -154,32 +227,31 @@ def handle_ctx(ack, command, respond, client):
             return
         storage.set_active(workspace_id, match["github_url"])
         respond({"response_type": "in_channel",
-                 "text": f"✅ Active repo set to *{match['name']}*"})
+                 "text": f"✅ Active repo → *{match['name']}* "
+                         f"({match['file_count']} files · "
+                         f"{match['redaction_count']} secrets redacted)"})
 
     # ── repos ──────────────────────────────────────────────────────────────────
     elif sub == "repos":
         repos = storage.get_repos(workspace_id)
         active = _active_repo(workspace_id)
         active_url = active["github_url"] if active else ""
-        respond({
-            "response_type": "in_channel",
-            "blocks": formatters.repos_list(repos, active_url),
-        })
+        respond({"response_type": "in_channel",
+                 "blocks": formatters.repos_list(repos, active_url)})
 
     # ── audit ──────────────────────────────────────────────────────────────────
     elif sub == "audit":
         logs = storage.get_audit_log(workspace_id)
         total = storage.total_redactions(workspace_id)
-        respond({
-            "response_type": "in_channel",
-            "blocks": formatters.audit_result(logs, total),
-        })
+        respond({"response_type": "in_channel",
+                 "blocks": formatters.audit_result(logs, total)})
 
     # ── ask ────────────────────────────────────────────────────────────────────
     elif sub == "ask":
         if not arg:
             respond({"response_type": "ephemeral",
-                     "text": "Usage: `/ctx ask <question>`"})
+                     "text": f"Usage: `/ctx ask <question>`\n"
+                             f"Example: `/ctx ask {SUGGESTED_QUESTION}`"})
             return
         path = _require_repo(workspace_id, respond)
         if not path:
@@ -188,30 +260,25 @@ def handle_ctx(ack, command, respond, client):
         respond({"response_type": "in_channel",
                  "text": f"_Searching *{repo['name']}* for:_ *{arg}*..."})
         try:
+            t0 = time.time()
             context = mcp_client.pack_context(arg, repo_path=path)
             file_count = context.count("\n### ")
-
-            # Slack AI capability: enrich with thread context if in a thread
-            thread_summary = ""
-
-            # Real-Time Search API: pull relevant Slack messages
-            enriched = slack_search.enrich_answer(client, arg,
-                                                  ai_client.answer(arg, context,
-                                                                   thread_summary))
+            answer = ai_client.answer(arg, context)
+            elapsed = round(time.time() - t0, 1)
+            enriched = slack_search.enrich_answer(client, arg, answer)
             respond({
                 "response_type": "in_channel",
-                "blocks": formatters.ask_result(arg, enriched, file_count),
+                "blocks": formatters.ask_result(arg, enriched, file_count, elapsed),
             })
         except Exception as exc:
             log.exception("ask failed")
             respond({"response_type": "ephemeral",
-                     "blocks": formatters.error_block(str(exc))})
+                     "text": f"❌ Could not answer: {str(exc)[:200]}"})
 
     # ── files ──────────────────────────────────────────────────────────────────
     elif sub == "files":
         if not arg:
-            respond({"response_type": "ephemeral",
-                     "text": "Usage: `/ctx files <task>`"})
+            respond({"response_type": "ephemeral", "text": "Usage: `/ctx files <task>`"})
             return
         path = _require_repo(workspace_id, respond)
         if not path:
@@ -220,14 +287,12 @@ def handle_ctx(ack, command, respond, client):
                  "text": f"_Finding files for:_ *{arg}*..."})
         try:
             result = mcp_client.list_files(arg, repo_path=path)
-            respond({
-                "response_type": "in_channel",
-                "blocks": formatters.files_result(arg, result),
-            })
+            respond({"response_type": "in_channel",
+                     "blocks": formatters.files_result(arg, result)})
         except Exception as exc:
             log.exception("files failed")
             respond({"response_type": "ephemeral",
-                     "blocks": formatters.error_block(str(exc))})
+                     "text": f"❌ Could not list files: {str(exc)[:200]}"})
 
     # ── scan ───────────────────────────────────────────────────────────────────
     elif sub == "scan":
@@ -235,17 +300,15 @@ def handle_ctx(ack, command, respond, client):
         if not path:
             return
         repo = _active_repo(workspace_id)
-        respond({"response_type": "in_channel", "text": "_Indexing repository..._"})
+        respond({"response_type": "in_channel", "text": "_Re-indexing repository..._"})
         try:
             result = mcp_client.scan_repo(repo_path=path)
-            respond({
-                "response_type": "in_channel",
-                "blocks": formatters.scan_result(repo["name"], result),
-            })
+            respond({"response_type": "in_channel",
+                     "blocks": formatters.scan_result(repo["name"], result)})
         except Exception as exc:
             log.exception("scan failed")
             respond({"response_type": "ephemeral",
-                     "blocks": formatters.error_block(str(exc))})
+                     "text": f"❌ Scan failed: {str(exc)[:200]}"})
 
     # ── churn ──────────────────────────────────────────────────────────────────
     elif sub == "churn":
@@ -255,55 +318,53 @@ def handle_ctx(ack, command, respond, client):
         respond({"response_type": "in_channel", "text": "_Checking git history..._"})
         try:
             result = mcp_client.churn_report(repo_path=path)
-            respond({
-                "response_type": "in_channel",
-                "blocks": formatters.churn_result(result),
-            })
+            respond({"response_type": "in_channel",
+                     "blocks": formatters.churn_result(result)})
         except Exception as exc:
             log.exception("churn failed")
             respond({"response_type": "ephemeral",
-                     "blocks": formatters.error_block(str(exc))})
+                     "text": f"❌ Churn report failed: {str(exc)[:200]}"})
 
     else:
-        respond({"blocks": formatters.help_blocks()})
+        respond({"blocks": formatters.help_blocks(SUGGESTED_QUESTION)})
 
 
 # ── App Home ───────────────────────────────────────────────────────────────────
 
 @app.event("app_home_opened")
 def handle_home(event, client):
-    workspace_id = event.get("view", {}).get("team_id") or ""
-    # Fallback: extract from user lookup
-    try:
-        user_info = client.users_info(user=event["user"])
-        workspace_id = workspace_id or ""
-    except Exception:
-        pass
-
-    # Get workspace from bot token context — use team from auth
     try:
         auth = client.auth_test()
         workspace_id = auth["team_id"]
     except Exception:
-        pass
+        workspace_id = ""
+
+    # Auto-preseed in background so first-time judges see a demo repo
+    threading.Thread(
+        target=_preseed_if_empty, args=(workspace_id,), daemon=True
+    ).start()
 
     repos = storage.get_repos(workspace_id)
     active = storage.get_active_repo(workspace_id)
     total = storage.total_redactions(workspace_id)
 
-    client.views_publish(
-        user_id=event["user"],
-        view=formatters.home_view(repos, active, total),
-    )
+    try:
+        client.views_publish(
+            user_id=event["user"],
+            view=formatters.home_view(repos, active, total,
+                                      PRESEED_REPO, SUGGESTED_QUESTION),
+        )
+    except Exception as exc:
+        log.exception("home view failed: %s", exc)
 
 
-# ── @mention handler (Slack AI capability: thread summarization) ───────────────
+# ── @mention (Slack AI: thread summarization) ──────────────────────────────────
 
 @app.event("app_mention")
 def handle_mention(event, say, client):
     question = re.sub(r"<@[A-Z0-9]+>", "", event["text"]).strip()
     if not question:
-        say(blocks=formatters.help_blocks())
+        say(blocks=formatters.help_blocks(SUGGESTED_QUESTION))
         return
 
     workspace_id = event.get("team", "")
@@ -312,38 +373,34 @@ def handle_mention(event, say, client):
 
     path = _active_repo_path(workspace_id)
     if not path:
-        say(
-            text="No repo connected. Use `/ctx connect <github-url>` first.",
-            thread_ts=thread_ts,
-        )
+        say(text=f"No repo connected. Use `/ctx connect {PRESEED_REPO}` first.",
+            thread_ts=thread_ts)
         return
 
     repo = _active_repo(workspace_id)
-    say(text=f"_Searching *{repo['name']}* for:_ *{question}*...",
-        thread_ts=thread_ts)
-
+    say(text=f"_Searching *{repo['name']}*..._", thread_ts=thread_ts)
     try:
-        # Slack AI capability: summarize thread context before reasoning
+        # Slack AI capability: summarize existing thread context before reasoning
         thread_summary = ""
         if event.get("thread_ts"):
             thread_summary = thread_context.get_thread_summary(
                 client, channel, event["thread_ts"]
             )
 
+        t0 = time.time()
         context = mcp_client.pack_context(question, repo_path=path)
         file_count = context.count("\n### ")
         answer = ai_client.answer(question, context, thread_summary)
+        elapsed = round(time.time() - t0, 1)
 
-        # Real-Time Search API: enrich with Slack team knowledge
+        # Real-Time Search API: pull relevant Slack discussions
         enriched = slack_search.enrich_answer(client, question, answer)
 
-        say(
-            blocks=formatters.ask_result(question, enriched, file_count),
-            thread_ts=thread_ts,
-        )
+        say(blocks=formatters.ask_result(question, enriched, file_count, elapsed),
+            thread_ts=thread_ts)
     except Exception as exc:
         log.exception("mention failed")
-        say(blocks=formatters.error_block(str(exc)), thread_ts=thread_ts)
+        say(text=f"❌ {str(exc)[:200]}", thread_ts=thread_ts)
 
 
 # ── DM handler ─────────────────────────────────────────────────────────────────
@@ -357,30 +414,32 @@ def handle_dm(event, say, client):
 
     question = (event.get("text") or "").strip()
     if not question:
-        say(blocks=formatters.help_blocks())
+        say(blocks=formatters.help_blocks(SUGGESTED_QUESTION))
         return
 
     workspace_id = event.get("team", "")
     path = _active_repo_path(workspace_id)
     if not path:
-        say("No repo connected. Use `/ctx connect <github-url>` first.")
+        say(f"No repo connected. Use `/ctx connect {PRESEED_REPO}` first.")
         return
 
     repo = _active_repo(workspace_id)
     say(f"_Searching *{repo['name']}*..._")
     try:
+        t0 = time.time()
         context = mcp_client.pack_context(question, repo_path=path)
         file_count = context.count("\n### ")
         answer = ai_client.answer(question, context)
+        elapsed = round(time.time() - t0, 1)
         enriched = slack_search.enrich_answer(client, question, answer)
-        say(blocks=formatters.ask_result(question, enriched, file_count))
+        say(blocks=formatters.ask_result(question, enriched, file_count, elapsed))
     except Exception as exc:
         log.exception("dm failed")
-        say(blocks=formatters.error_block(str(exc)))
+        say(f"❌ {str(exc)[:200]}")
 
 
 # ── entrypoint ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    log.info("ContextBot starting | default_repo=%s", mcp_client.DEFAULT_REPO)
+    log.info("ContextBot starting | preseed=%s", PRESEED_REPO)
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
