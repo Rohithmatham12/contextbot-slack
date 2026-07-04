@@ -1,13 +1,13 @@
 {
   "display_information": {
     "name": "ContextBot",
-    "description": "Ask anything about your codebase. Powered by ContextOS MCP — secrets auto-redacted.",
+    "description": "Ask anything about any GitHub repo. Code context (MCP) + Slack history (RTS) + thread summarization (Slack AI) — secrets stripped at ingestion.",
     "background_color": "#1a1a2e",
-    "long_description": "ContextBot connects ContextOS MCP to Slack. Ask a question, get an AI answer backed by real code context — not hallucinations. Files are ranked by import centrality and keyword relevance. Secrets are automatically redacted before any code appears in Slack."
+    "long_description": "ContextBot connects ContextOS MCP to Slack. Connect any GitHub repo with /ctx connect, then ask questions and get AI answers backed by real code context — not hallucinations. Secrets are automatically detected and redacted before anything is stored or sent to an LLM. Real-Time Search pulls relevant Slack discussions into the answer. Thread summarization (Slack AI capability) gives the agent full conversation context before reasoning."
   },
   "features": {
     "app_home": {
-      "home_tab_enabled": false,
+      "home_tab_enabled": true,
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
     },
@@ -18,8 +18,8 @@
     "slash_commands": [
       {
         "command": "/ctx",
-        "description": "Query your codebase with ContextOS",
-        "usage_hint": "ask <question> | files <task> | scan | churn",
+        "description": "ContextOS — codebase intelligence in Slack",
+        "usage_hint": "connect <url> | ask <q> | files <task> | repos | audit | use <name> | churn",
         "should_escape": false
       }
     ]
@@ -29,16 +29,21 @@
       "bot": [
         "app_mentions:read",
         "chat:write",
+        "chat:write.public",
         "commands",
         "im:history",
         "im:read",
-        "im:write"
+        "im:write",
+        "channels:history",
+        "groups:history",
+        "search:read"
       ]
     }
   },
   "settings": {
     "event_subscriptions": {
       "bot_events": [
+        "app_home_opened",
         "app_mention",
         "message.im"
       ]
