@@ -54,17 +54,24 @@ def churn_result(result: str) -> list[dict]:
     ]
 
 
-def connect_result(name: str, url: str, scan: str, redactions: int) -> list[dict]:
+def connect_result(name: str, url: str, scan: str, redactions: int,
+                   large_files: int = 0) -> list[dict]:
     redact_line = (
         f"🔒 *{redactions} secrets redacted* before anything was stored or sent to an LLM"
         if redactions > 0
         else "🔒 No secrets found in this repo"
     )
+    skip_line = (
+        f"\n⚠️ *{large_files} large file{'s' if large_files != 1 else ''} skipped* "
+        f"(>512 KB — too large to index safely)"
+        if large_files > 0
+        else ""
+    )
     return [
         _hdr(f"✅ Connected: {name}"),
         _md(f"`{url}`\n\n```{scan[:1600]}```"),
         _div(),
-        _md(redact_line),
+        _md(redact_line + skip_line),
         _ctx(f"Use `/ctx ask <question>` to start · `/ctx use {name}` to switch · {FOOTER}"),
     ]
 

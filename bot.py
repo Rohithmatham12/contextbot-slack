@@ -140,6 +140,8 @@ def _clone_and_index(github_url: str, workspace_id: str) -> dict:
     except Exception:
         pass
 
+    large_file_count = _count_large_files(local_path)
+
     storage.upsert_repo(
         workspace_id, github_url, local_path, name,
         file_count=file_count, redaction_count=redaction_count,
@@ -147,8 +149,25 @@ def _clone_and_index(github_url: str, workspace_id: str) -> dict:
     return {
         "name": name, "local_path": local_path,
         "file_count": file_count, "redaction_count": redaction_count,
+        "large_file_count": large_file_count,
         "scan_result": scan_result,
     }
+
+
+_LARGE_FILE_THRESHOLD = 524288  # 512 KB — matches ContextOS DEFAULT_MAX_FILE_BYTES
+
+
+def _count_large_files(local_path: str) -> int:
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(local_path):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for f in filenames:
+            try:
+                if os.path.getsize(os.path.join(dirpath, f)) > _LARGE_FILE_THRESHOLD:
+                    count += 1
+            except OSError:
+                pass
+    return count
 
 
 def _log_redactions_from_pack(pack_output: str, workspace_id: str, repo_name: str):
@@ -227,7 +246,7 @@ def handle_ctx(ack, command, respond, client):
                 "response_type": "in_channel",
                 "blocks": formatters.connect_result(
                     stats["name"], arg, stats["scan_result"],
-                    stats["redaction_count"]
+                    stats["redaction_count"], stats["large_file_count"]
                 ),
             })
         except PermissionError as exc:

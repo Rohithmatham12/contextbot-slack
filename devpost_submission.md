@@ -62,8 +62,10 @@ Every failure path produces a specific, human-readable Slack message — no raw 
 - Non-GitHub URL → "Only GitHub repos are supported"
 - Nonexistent / private repo → "Repo not found or private. Make sure it's public."
 - Clone timeout → "Clone timed out (>120s). Repo may be too large."
-- Concurrent connect → "Already indexing a repo. Wait for it to finish."
-- Binary files and large files: ContextOS skips them at scan time via extension allowlist and file-size threshold. No crash.
+- Concurrent connect (same workspace) → "Already indexing. Wait for it to finish."
+- Concurrent connect (different workspaces) → fully parallel; per-workspace locking means one long-running index job never blocks a different workspace's Q&A
+- Binary files: skipped silently at scan time via raw byte detection — correct behavior, not a user-facing event
+- Large files (>512 KB): skipped at scan time; count surfaced in the connect response ("2 large files skipped") — keeps the transparency promise consistent with secret redaction counts
 
 ---
 
@@ -86,7 +88,7 @@ Every failure path produces a specific, human-readable Slack message — no raw 
 
 **Most Innovative Slack Agent:** ContextBot is the first Slack code agent to treat secret redaction as an ingestion-time architectural guarantee rather than an access-control policy — secrets are structurally incapable of reaching the LLM or vector store, not just permissioned against it.
 
-**Best Technological Implementation:** ContextBot fires all three challenge technologies — MCP, Slack AI, and Real-Time Search — in a single `/ctx ask` request, fusing code context and Slack tribal knowledge into one synthesized answer in 3.0 seconds.
+**Best Technological Implementation:** ContextBot fires all three challenge technologies — MCP, Slack AI, and Real-Time Search — in a single `/ctx ask` request, fusing code context and Slack tribal knowledge into one synthesized answer in 3.0 seconds. Per-workspace locking means concurrent indexing jobs never block each other — Q&A remains live while a background index runs.
 
 ---
 
