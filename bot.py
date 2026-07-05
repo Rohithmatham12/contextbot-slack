@@ -76,10 +76,14 @@ def _active_repo_path(workspace_id: str) -> str | None:
 def _require_repo(workspace_id: str, respond) -> str | None:
     path = _active_repo_path(workspace_id)
     if not path:
+        # Kick off preseed in background so next attempt works
+        threading.Thread(
+            target=_preseed_if_empty, args=(workspace_id,), daemon=True
+        ).start()
         respond({
             "response_type": "ephemeral",
-            "text": "No repo connected. Use `/ctx connect <github-url>` first.\n"
-                    f"Try: `/ctx connect {PRESEED_REPO}`",
+            "text": "⏳ Indexing demo repo in background (~30s). Try again in a moment.\n"
+                    f"Or connect your own: `/ctx connect {PRESEED_REPO}`",
         })
         return None
     return path
@@ -423,7 +427,8 @@ def handle_mention(event, say, client):
 
     path = _active_repo_path(workspace_id)
     if not path:
-        say(text=f"No repo connected. Use `/ctx connect {PRESEED_REPO}` first.",
+        threading.Thread(target=_preseed_if_empty, args=(workspace_id,), daemon=True).start()
+        say(text="⏳ Indexing demo repo in background (~30s). Mention me again in a moment.",
             thread_ts=thread_ts)
         return
 
@@ -470,7 +475,8 @@ def handle_dm(event, say, client):
     workspace_id = event.get("team", "")
     path = _active_repo_path(workspace_id)
     if not path:
-        say(f"No repo connected. Use `/ctx connect {PRESEED_REPO}` first.")
+        threading.Thread(target=_preseed_if_empty, args=(workspace_id,), daemon=True).start()
+        say("⏳ Indexing demo repo in background (~30s). Message me again in a moment.")
         return
 
     repo = _active_repo(workspace_id)
@@ -492,4 +498,17 @@ def handle_dm(event, say, client):
 
 if __name__ == "__main__":
     log.info("ContextBot starting | preseed=%s", PRESEED_REPO)
+
+    # Preseed on startup — get workspace ID from bot token, index demo repo
+    def _startup_preseed():
+        try:
+            auth = app.client.auth_test()
+            wid = auth["team_id"]
+            _preseed_if_empty(wid)
+            log.info("Startup preseed complete for workspace %s", wid)
+        except Exception as exc:
+            log.warning("Startup preseed failed: %s", exc)
+
+    threading.Thread(target=_startup_preseed, daemon=True).start()
+
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
