@@ -150,7 +150,8 @@ def home_view(repos: list[dict], active: dict | None, total_redactions: int,
             "• `/ctx repos` — list all connected repos\n"
             "• `/ctx use <name>` — switch active repo\n"
             "• `/ctx audit` — secret redaction log\n"
-            "• `/ctx churn` — most actively changed files (30d)\n\n"
+            "• `/ctx churn` — most actively changed files (30d)\n"
+            "• `/ctx tour` — instant onboarding walkthrough for new contributors\n\n"
             "Or @mention me in any channel, or DM me directly."
         ),
     ]
@@ -169,6 +170,19 @@ def home_view(repos: list[dict], active: dict | None, total_redactions: int,
     return {"type": "home", "blocks": blocks}
 
 
+def tour_result(repo_name: str, walkthrough: str) -> list[dict]:
+    return [
+        _hdr(f"🗺️ Onboarding Tour: {repo_name}"),
+        _md(walkthrough[:2900]),
+        _div(),
+        _ctx(
+            "Generated from secret-redacted code context · "
+            "Ideal for new contributors and bootcamp grads · "
+            f"{FOOTER}"
+        ),
+    ]
+
+
 def error_block(msg: str) -> list[dict]:
     return [_md(f"❌ *Error:* {msg[:500]}")]
 
@@ -185,7 +199,8 @@ def help_blocks(suggested_question: str = "") -> list[dict]:
             "• `/ctx repos` — connected repos\n"
             "• `/ctx use <name>` — switch active repo\n"
             "• `/ctx audit` — secret redaction log\n"
-            "• `/ctx churn` — hottest files (30d)"
+            "• `/ctx churn` — hottest files (30d)\n"
+            "• `/ctx tour` — instant onboarding walkthrough for new contributors"
             f"{tip}"
         ),
         _ctx(FOOTER),

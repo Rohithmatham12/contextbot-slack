@@ -19,7 +19,7 @@
       {
         "command": "/ctx",
         "description": "ContextOS — codebase intelligence in Slack",
-        "usage_hint": "connect <url> | ask <q> | files <task> | repos | audit | use <name> | churn",
+        "usage_hint": "connect <url> | ask <q> | tour | files <task> | repos | audit | use <name> | churn",
         "should_escape": false
       }
     ]
