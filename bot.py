@@ -99,9 +99,14 @@ def _clone_and_index(github_url: str, workspace_id: str) -> dict:
     )
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace").lower()
-        if "not found" in stderr or "repository" in stderr or "authentication" in stderr:
+        # Docker has no credential helper — "could not read Username" means
+        # repo doesn't exist or is private (git can't prompt for creds)
+        if any(phrase in stderr for phrase in [
+            "not found", "repository", "authentication",
+            "could not read username", "access denied", "does not exist",
+        ]):
             raise PermissionError(
-                f"Repo not found or private. Make sure `{github_url}` is public."
+                f"Repo not found or private. Make sure `{github_url}` is a public repo."
             )
         raise RuntimeError(
             f"git clone failed: {result.stderr.decode(errors='replace')[:200]}"
