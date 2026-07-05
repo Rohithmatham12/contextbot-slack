@@ -21,7 +21,7 @@ Secrets (API keys, DB connection strings, JWT tokens, AWS credentials) are detec
 ## Challenge technologies used
 
 ### 1. Model Context Protocol (MCP)
-ContextOS exposes an MCP server (`contextos serve --stdio <repo_path>`). ContextBot spawns this server per call, invokes `pack_context` to select the most relevant files for the question (ranked by keyword match and import centrality), and injects that context — already secret-redacted — into the LLM prompt. 72 files analyzed per typical answer, 0 secrets leaked.
+ContextOS exposes an MCP server (`contextos serve --stdio <repo_path>`). ContextBot spawns this server per call, invokes `pack_context` to select the most relevant files for the question (ranked by keyword match and import centrality), and injects that context — already secret-redacted — into the LLM prompt. 35 files analyzed per typical answer, 0 secrets leaked.
 
 ### 2. Real-Time Search API
 Every answer is enriched with relevant Slack messages via `client.search_messages()`. If your team already discussed this part of the codebase in a channel, that context surfaces in the answer. Code knowledge + team knowledge in one response.
@@ -73,8 +73,8 @@ Every failure path produces a specific, human-readable Slack message — no raw 
 |---|---|
 | Files indexed (ContextOS repo) | 132 |
 | Secrets redacted at ingestion | 16 |
-| Files analyzed per answer | 72 |
-| Answer latency (p50) | ~2.5s |
+| Files analyzed per answer | 35 |
+| Answer latency (p50) | ~3.0s |
 | Clone + index time | ~28s |
 | Deployment cost | $7/month |
 
@@ -86,7 +86,7 @@ Every failure path produces a specific, human-readable Slack message — no raw 
 
 **Most Innovative Slack Agent:** ContextBot is the first Slack code agent to treat secret redaction as an ingestion-time architectural guarantee rather than an access-control policy — secrets are structurally incapable of reaching the LLM or vector store, not just permissioned against it.
 
-**Best Technological Implementation:** ContextBot fires all three challenge technologies — MCP, Slack AI, and Real-Time Search — in a single `/ctx ask` request, fusing code context and Slack tribal knowledge into one synthesized answer in under 3 seconds.
+**Best Technological Implementation:** ContextBot fires all three challenge technologies — MCP, Slack AI, and Real-Time Search — in a single `/ctx ask` request, fusing code context and Slack tribal knowledge into one synthesized answer in 3.0 seconds.
 
 ---
 
